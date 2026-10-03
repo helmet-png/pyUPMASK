@@ -1,3 +1,59 @@
+"""內圈（inner loop）：分群，再逐群檢查天空位置是否比隨機集中。
+
+======================================================================
+【這支程式在做什麼】（M45 專案加註，2026-10）
+======================================================================
+UPMASK 方法的核心一步。輸入是「這一輪」還留著的星：
+  1. 在 PCA 後的自行＋視差空間（2 維）把星切成很多小群，平均每群 25 顆；
+  2. 對每個小群，看它的成員在天空上（縮放到 [0,1] 的座標）是不是比
+     完全隨機更集中——用 Ripley's K 函數量；
+  3. 通過檢定的小群裡的星保留下來。
+直覺：真正的星團成員自行相近、天空位置也相近；只是自行碰巧相近的場星，
+天空位置會是隨機散布的，通不過檢定。
+
+======================================================================
+【(a) 引用的外部函式庫】
+======================================================================
+第三方套件：
+  numpy（np）   np.logical_or.reduce（合併多個遮罩）、陣列運算
+本程式的模組：
+  clustAlgor.sklearnMethods  用 scikit-learn 分群（M45：MiniBatchKMeans）
+  clustAlgor.voronoi／kNNdens／RKmeans／pycl   其他分群方法（M45 不用）
+  rjctRandField.rkfunc       Ripley's K 檢定：回傳「比隨機集中多少」的分數 C_s
+
+======================================================================
+【(b) 用到的參數與意義】
+======================================================================
+  clust_xy      天空座標（[0,1]）
+  clust_data    分群用資料（PCA 後 2 維）
+  N_membs       每群平均星數（M45：25）→ 小群數 = 星數 ÷ 25
+  N_cl_max      小群數上限（M45：1000）
+  clust_method  分群方法（M45：MiniBatchKMeans）
+  clRjctMethod  天空檢定方法（固定 'rkfunc'）
+  Kest          Ripley's K 估計器
+  C_thresh      檢定門檻；rkfunc 時每群重新算：1.68 / 群內星數
+                （Dixon 2001 給的 1% 臨界值：隨機分布只有 1% 機會超過它）
+  N_st_max = 20000  Voronoi／kNNdens 用的星數上限（M45 不用）
+  minStars = 3  少於 3 顆的群直接跳過（當場星）
+程式內寫死：超過 5000 顆的群也直接跳過（Ripley's K 太耗記憶體）
+
+======================================================================
+【(c) 真正在執行操作的核心】（行號以這個版本為準，改程式後要更新）
+======================================================================
+  核心 1｜第 82–115 行｜決定小群數並分群
+  核心 2｜第 117–194 行｜逐群做 Ripley's K 檢定，合併通過的星
+
+======================================================================
+【(d) 整體流程】
+======================================================================
+  小群數 = max(2, 星數 ÷ 25)，上限 1000
+    → 用 MiniBatchKMeans 在 2 維資料上分群，得到每顆星的群標籤
+    → 逐一看每個標籤：
+        少於 3 顆或多於 5000 顆 → 跳過
+        算這群在天空上的 C_s（Ripley's L 函數偏離隨機的最大值）
+        C_s ≥ 1.68 / 群內星數 → 通過，這群的星加入保留名單
+    → 回傳：群數、保留名單（遮罩）、通過的群數
+"""
 
 import numpy as np
 from . import clustAlgor
@@ -23,10 +79,12 @@ def loop(
       mark its stars as field stars.
     """
 
+    # ═══════════════ 核心 1：分群 ═══════════════
     print("  Performing clustering on array of shape ({}, {})".format(
         *clust_data.shape), file=prfl)
 
     # Number of clusters: min is 2, max is N_cl_max
+    # ↓ 小群數 = 星數 ÷ 每群星數（25），至少 2 群
     n_clusters = max(2, int(clust_data.shape[0] / N_membs))
 
     if n_clusters > N_cl_max:
@@ -34,6 +92,7 @@ def loop(
         n_clusters = N_cl_max
 
     # Obtain all the clusters in the non-spatial data
+    # ↓ labels：每顆星被分到第幾群（0, 1, 2, …）
     if clust_method == 'Voronoi':
         labels = clustAlgor.voronoi(clust_data, N_membs, n_clusters, N_st_max)
         # labels = clustAlgor.DDhisto(clust_data, N_membs, n_clusters)
@@ -42,6 +101,7 @@ def loop(
             clust_data, cl_method_pars, N_membs, n_clusters, N_st_max)
     elif clust_method == 'rkmeans':
         labels = clustAlgor.RKmeans(clust_data, n_clusters)
+    # ↓ M45 走這裡（MiniBatchKMeans 是 scikit-learn 的方法）
     elif clust_method[:4] != 'pycl':
         # scikit-learn methods
         labels = clustAlgor.sklearnMethods(
@@ -54,9 +114,11 @@ def loop(
     # for cl in clusts_msk:
     #     plt.scatter(*clust_data[cl].T[:2], alpha=.25)
 
+    # ═══════════════ 核心 2：逐群天空檢定 ═══════════════
     N_clusts = len(set(labels))
     print("  Identified {} clusters".format(N_clusts), file=prfl)
 
+    # ↓ msk_all：保留名單，一開始全部 False；N_survived：通過的群數
     msk_all, N_survived = np.array([False for _ in range(labels.shape[0])]), 0
     # For each cluster found by the clustering method, check if it is composed
     # of field stars or actual cluster members, using their (x, y)
@@ -70,6 +132,7 @@ def loop(
             continue
 
         # Separate stars assigned to this label
+        # ↓ cl_msk：屬於第 i 群的星
         cl_msk = labels == i
 
         # Smaller C_s values point to samples that come from a uniform
@@ -89,6 +152,7 @@ def loop(
         # Test how similar this cluster's (x, y) distribution is compared
         # to a uniform random distribution.
         # if clRjctMethod == 'rkfunc':
+        # ↓ C_s：這群星的天空分布偏離「完全隨機」多少（越大越集中）
         C_s = rjctRandField.rkfunc(clust_xy[cl_msk], Kest)
         # if clRjctMethod == 'kdetest':
         #     C_s, KDE_vals = rjctRandField.kdetest(
@@ -103,6 +167,7 @@ def loop(
         # being composed of field stars and discarded.
 
         # 1% critical value. From Dixon (2001), 'Ripley's K function'
+        # ↓ 門檻隨群大小變：星越多，隨機分布的偏離越小，門檻也越低
         if clRjctMethod == 'rkfunc':
             C_thresh = 1.68 / cl_msk.sum()
 
@@ -111,6 +176,7 @@ def loop(
             print("   Cluster {} survived (C_s={:.2f}), N={}".format(
                 i, C_s, cl_msk.sum()), file=prfl)
             # Combine all the masks using a logical OR
+            # ↓ 把這群的星加進保留名單
             msk_all = np.logical_or.reduce([msk_all, cl_msk])
             N_survived += 1
 

@@ -1,3 +1,46 @@
+"""分群演算法集合。
+
+======================================================================
+【這支程式在做什麼】（M45 專案加註，2026-10）
+======================================================================
+內圈要把星在（PCA 後的）自行＋視差空間切成很多小群。這裡收了好幾種方法；
+M45 用 params.ini 的 clust_method = MiniBatchKMeans，走 sklearnMethods()。
+其他函式（DDhisto、voronoi、kNNdens、densLabeling、RKmeans、pycl）M45 都不用。
+
+MiniBatchKMeans：K-means 的快速版。K-means 把資料分成 k 群，反覆「每點歸到
+最近的中心 → 中心移到該群平均」直到穩定；MiniBatch 版每次只用一小批隨機
+抽出的點更新中心，速度快很多，結果接近。k = 星數 ÷ 25（內圈決定）。
+它沒有指定 random_state，所以亂數來自 numpy 全域亂數，由 params.ini 的
+rnd_seed 固定。
+
+======================================================================
+【(a) 引用的外部函式庫】
+======================================================================
+  numpy（np）
+  sklearn.cluster（skclust）    MiniBatchKMeans、KMeans、DBSCAN 等分群方法
+  sklearn.mixture（skmixture）  GaussianMixture 等（M45 不用）
+  scipy.spatial.distance.cdist、scipy.spatial   只有 voronoi／kNNdens 用
+  voronoiVols.voronoi_volumes   只有 voronoi 用
+
+======================================================================
+【(b) 用到的參數與意義】
+======================================================================
+  clust_method     方法名稱（M45：'MiniBatchKMeans'）
+  cl_method_pars   params.ini [Clustering parameters] 的額外參數（M45：沒有）
+  clust_data       要分群的資料（星數 × 2）
+  n_clusters       群數 k
+
+======================================================================
+【(c) 真正在執行操作的核心】（行號以這個版本為準，改程式後要更新）
+======================================================================
+  核心 1｜第 213–285 行｜sklearnMethods()：建模型、設群數、擬合、取標籤
+
+======================================================================
+【(d) 整體流程】
+======================================================================
+  依名稱建 scikit-learn 模型（全部用預設參數）
+    → 有額外參數就套上 → 設群數 k → fit → 每顆星的群標籤 labels_
+"""
 
 import numpy as np
 import sklearn.cluster as skclust
@@ -167,6 +210,7 @@ def RKmeans(clust_data, n_clusters):
     return labels
 
 
+# ═══════════════ 核心 1：scikit-learn 分群 ═══════════════
 def sklearnMethods(clust_method, cl_method_pars, clust_data, n_clusters):
     """
     Find clusters in the 'clust_data' array using the selected algorithm.
@@ -175,6 +219,7 @@ def sklearnMethods(clust_method, cl_method_pars, clust_data, n_clusters):
     if clust_method == 'KMeans':
         model = skclust.KMeans()
 
+    # ↓ M45 用這個；其他參數全部是 scikit-learn 預設值
     elif clust_method == 'MiniBatchKMeans':
         model = skclust.MiniBatchKMeans()
 
@@ -222,9 +267,11 @@ def sklearnMethods(clust_method, cl_method_pars, clust_data, n_clusters):
         if clust_method in ('GaussianMixture', 'BayesianGaussianMixture'):
             model.n_components = n_clusters
         else:
+            # ↓ 群數 k = 星數 ÷ 25（內圈算好傳進來）
             model.n_clusters = n_clusters
 
     # Fit the model
+    # ↓ 執行分群
     model.fit(clust_data)
 
     # Extract the labels
@@ -232,6 +279,7 @@ def sklearnMethods(clust_method, cl_method_pars, clust_data, n_clusters):
         labels = model.predict(clust_data)
         # probs_gmm = model.predict_proba(clust_data).max(1)
     else:
+        # ↓ 每顆星被分到的群編號
         labels = model.labels_
 
     return labels
