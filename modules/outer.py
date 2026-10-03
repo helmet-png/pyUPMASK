@@ -1,4 +1,6 @@
 
+import os
+
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
@@ -108,8 +110,16 @@ def reSampleData(resampleFlag, data, data_err, prfl, standard_scale=True):
     """
     if resampleFlag:
         # Gaussian random sample
-        grs = np.random.normal(0., 1., data.shape[0])
-        sampled_data = data + grs[:, np.newaxis] * data_err
+        #
+        # 原始 pyUPMASK 每顆星只抽「一個」亂數，再套用到所有資料維度上，等於
+        # pmRA/pmDE/Plx 的擾動完全相關。設環境變數 PYUPMASK_INDEP_RESAMPLE=1
+        # 改成每個維度各自獨立抽樣。保留原行為當預設，才不會偏離已發表的方法。
+        if os.environ.get("PYUPMASK_INDEP_RESAMPLE") == "1":
+            grs = np.random.normal(0., 1., data.shape)
+            sampled_data = data + grs * data_err
+        else:
+            grs = np.random.normal(0., 1., data.shape[0])
+            sampled_data = data + grs[:, np.newaxis] * data_err
     else:
         sampled_data = np.array(list(data))
 

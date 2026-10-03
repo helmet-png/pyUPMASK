@@ -6,9 +6,18 @@ from astropy.table import Column
 from astropy.table import Table, vstack
 import configparser
 import warnings
-from distutils.util import strtobool
 from sklearn.preprocessing import MinMaxScaler
 from .outlierRjct import stdRegion, sklearnMethod
+
+
+def strtobool(val):
+    """distutils 在 Python 3.12 被移除，補一個等效實作（原本 import 自 distutils.util）。"""
+    val = val.strip().lower()
+    if val in ('y', 'yes', 't', 'true', 'on', '1'):
+        return 1
+    if val in ('n', 'no', 'f', 'false', 'off', '0'):
+        return 0
+    raise ValueError("invalid truth value {!r}".format(val))
 
 
 def readINI():
